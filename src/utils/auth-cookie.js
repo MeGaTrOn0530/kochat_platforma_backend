@@ -3,7 +3,7 @@ import env from "../config/env.js";
 function getCookieOptions() {
   return {
     httpOnly: true,
-    sameSite: env.nodeEnv === "production" ? "strict" : "lax",
+    sameSite: env.nodeEnv === "production" ? "none" : "lax",
     secure: env.nodeEnv === "production",
     maxAge: env.jwtExpiresHours * 60 * 60 * 1000,
     path: "/",

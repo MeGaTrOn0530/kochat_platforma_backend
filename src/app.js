@@ -8,31 +8,19 @@ import apiRouter from "./routes/index.js";
 import { errorHandler, notFoundHandler } from "./middlewares/error.middleware.js";
 import { createRateLimiter, getRateLimitIp } from "./middlewares/rate-limit.middleware.js";
 import { attachApiSecurityHeaders, requireTrustedOrigin } from "./middlewares/request-security.middleware.js";
-import { isOriginTrusted, isSafeMethod } from "./utils/security.js";
+import { isSafeMethod } from "./utils/security.js";
 import { getUploadRoot } from "./utils/upload-storage.js";
 
 const app = express();
 
 const corsOptionsDelegate = (req, callback) => {
   const requestOrigin = req.get("origin");
-
-  if (!requestOrigin || isOriginTrusted(requestOrigin, env, req)) {
-    return callback(null, {
-      origin: requestOrigin || true,
-      credentials: true,
-      methods: ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
-      allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-    });
-  }
-
-  console.warn("CORS origin rad etildi", {
-    origin: requestOrigin,
-    host: req.get("host"),
-    forwardedHost: req.get("x-forwarded-host"),
-    forwardedProto: req.get("x-forwarded-proto"),
-    referer: req.get("referer"),
+  return callback(null, {
+    origin: requestOrigin || true,
+    credentials: true,
+    methods: ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   });
-  return callback(new Error("CORS origin ruxsat etilmagan."));
 };
 
 const writeRateLimiter = createRateLimiter({

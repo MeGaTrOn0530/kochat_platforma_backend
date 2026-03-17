@@ -104,10 +104,6 @@ export function assertSecureProductionEnv(env) {
     missing.push("DB_PASSWORD");
   }
 
-  if (!env.corsOrigin || env.corsOrigin === "*") {
-    missing.push("CORS_ORIGIN");
-  }
-
   if (wantsBootstrapAdmin) {
     if (!env.defaultAdminUsername) {
       missing.push("DEFAULT_ADMIN_USERNAME");

@@ -1,0 +1,313 @@
+@baseUrl = http://localhost:5000
+@token = paste_jwt_token_here
+
+### Health
+GET {{baseUrl}}/health
+
+### Login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "Admin123!"
+}
+
+### Me
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{token}}
+
+### Logout
+POST {{baseUrl}}/api/auth/logout
+Authorization: Bearer {{token}}
+
+### Users list
+GET {{baseUrl}}/api/users
+Authorization: Bearer {{token}}
+
+### User create
+POST {{baseUrl}}/api/users
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "fullName": "Ali Valiyev",
+  "username": "ali",
+  "password": "Ali12345!",
+  "role": "bugalter",
+  "email": "ali@example.com",
+  "phone": "+998901234567",
+  "locationId": 1
+}
+
+### User update
+PUT {{baseUrl}}/api/users/2
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "fullName": "Ali Valiyev Updated",
+  "role": "bosh_agranom"
+}
+
+### User delete
+DELETE {{baseUrl}}/api/users/2
+Authorization: Bearer {{token}}
+
+### Locations list
+GET {{baseUrl}}/api/locations
+Authorization: Bearer {{token}}
+
+### Location create
+POST {{baseUrl}}/api/locations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Andijon filial",
+  "code": "AND-01",
+  "type": "branch",
+  "region": "Andijon",
+  "address": "Andijon shahar"
+}
+
+### Location update
+PUT {{baseUrl}}/api/locations/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "address": "Yangilangan manzil"
+}
+
+### Seedling types list
+GET {{baseUrl}}/api/catalog/seedling-types
+Authorization: Bearer {{token}}
+
+### Seedling type create
+POST {{baseUrl}}/api/catalog/seedling-types
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Pomidor",
+  "code": "POM",
+  "description": "Pomidor ko'chati"
+}
+
+### Seedling type update
+PUT {{baseUrl}}/api/catalog/seedling-types/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "description": "Yangilangan izoh"
+}
+
+### Seedling type delete
+DELETE {{baseUrl}}/api/catalog/seedling-types/1
+Authorization: Bearer {{token}}
+
+### Varieties list
+GET {{baseUrl}}/api/catalog/varieties
+Authorization: Bearer {{token}}
+
+### Varieties by type
+GET {{baseUrl}}/api/catalog/varieties/by-type/1
+Authorization: Bearer {{token}}
+
+### Variety create
+POST {{baseUrl}}/api/catalog/varieties
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "seedlingTypeId": 1,
+  "name": "Cherry Red",
+  "code": "CHR-RED",
+  "description": "Cherry pomidor turi"
+}
+
+### Variety update
+PUT {{baseUrl}}/api/catalog/varieties/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "description": "Yangilangan variety izohi"
+}
+
+### Variety delete
+DELETE {{baseUrl}}/api/catalog/varieties/1
+Authorization: Bearer {{token}}
+
+### Seedlings list
+GET {{baseUrl}}/api/seedlings
+Authorization: Bearer {{token}}
+
+### Seedlings receive
+POST {{baseUrl}}/api/seedlings/receive
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "seedlingTypeId": 1,
+  "varietyId": 1,
+  "locationId": 1,
+  "quantity": 1000,
+  "stage": "received",
+  "notes": "Yangi partiya",
+  "requiresApproval": true
+}
+
+### Seedlings stage change
+POST {{baseUrl}}/api/seedlings/stage-change
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "batchId": 1,
+  "locationId": 1,
+  "nextStage": "nursery",
+  "defectQuantityChange": 10,
+  "notes": "Saralashdan o'tdi"
+}
+
+### Seedlings history
+GET {{baseUrl}}/api/seedlings/history/1
+Authorization: Bearer {{token}}
+
+### Seedlings approve history
+POST {{baseUrl}}/api/seedlings/1/approve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "approvalNote": "Tasdiqlandi"
+}
+
+### Transfers list
+GET {{baseUrl}}/api/transfers
+Authorization: Bearer {{token}}
+
+### Transfer create
+POST {{baseUrl}}/api/transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "batchId": 1,
+  "fromLocationId": 1,
+  "toLocationId": 2,
+  "quantity": 300,
+  "notes": "Filialga jo'natildi"
+}
+
+### Transfer sender confirm
+POST {{baseUrl}}/api/transfers/1/sender-confirm
+Authorization: Bearer {{token}}
+
+### Transfer head confirm
+POST {{baseUrl}}/api/transfers/1/head-confirm
+Authorization: Bearer {{token}}
+
+### Transfer receiver confirm
+POST {{baseUrl}}/api/transfers/1/receiver-confirm
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "stage": "nursery",
+  "notes": "Transfer qabul qilindi"
+}
+
+### Orders list
+GET {{baseUrl}}/api/orders
+Authorization: Bearer {{token}}
+
+### Order detail
+GET {{baseUrl}}/api/orders/1
+Authorization: Bearer {{token}}
+
+### Order create
+POST {{baseUrl}}/api/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "customerName": "Green Farm",
+  "customerPhone": "+998901112233",
+  "locationId": 1,
+  "items": [
+    {
+      "batchId": 1,
+      "quantity": 100,
+      "unitPrice": 15000
+    }
+  ]
+}
+
+### Order sell
+POST {{baseUrl}}/api/orders/1/sell
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "notes": "Naqd sotuv"
+}
+
+### Tasks list
+GET {{baseUrl}}/api/tasks
+Authorization: Bearer {{token}}
+
+### Task create
+POST {{baseUrl}}/api/tasks
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "title": "Batchni tekshirish",
+  "description": "1-batch sifat nazorati",
+  "locationId": 1,
+  "assignedTo": 1,
+  "priority": "high",
+  "status": "open",
+  "dueDate": "2026-03-20 18:00:00"
+}
+
+### Task update
+PUT {{baseUrl}}/api/tasks/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "done"
+}
+
+### Reports general
+GET {{baseUrl}}/api/reports/general
+Authorization: Bearer {{token}}
+
+### Reports locations
+GET {{baseUrl}}/api/reports/locations
+Authorization: Bearer {{token}}
+
+### Reports defects
+GET {{baseUrl}}/api/reports/defects
+Authorization: Bearer {{token}}
+
+### Reports orders
+GET {{baseUrl}}/api/reports/orders?dateFrom=2026-03-01&dateTo=2026-03-31
+Authorization: Bearer {{token}}
+
+### Reports tasks
+GET {{baseUrl}}/api/reports/tasks
+Authorization: Bearer {{token}}
+
+### Dashboard stats
+GET {{baseUrl}}/api/dashboard/stats
+Authorization: Bearer {{token}}
+
+### Dashboard activity log
+GET {{baseUrl}}/api/dashboard/activity-log
+Authorization: Bearer {{token}}

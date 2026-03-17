@@ -29,7 +29,8 @@ router.get(
   asyncHandler(async (_req, res) => {
     const pool = getPool();
     const [rows] = await pool.query(
-      `SELECT id, name, description, price, image_path, is_active, display_order, created_at, updated_at
+      `SELECT id, name, description, price, image_path, contact_phone, contact_phone_secondary,
+              contact_note, is_active, display_order, created_at, updated_at
        FROM customer_products
        WHERE is_active = 1
        ORDER BY display_order ASC, id DESC`
@@ -73,13 +74,17 @@ router.post(
       const result = await withTransaction(async (conn) => {
         const [insertResult] = await conn.query(
           `INSERT INTO customer_products
-            (name, description, price, image_path, is_active, display_order, created_by, updated_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (name, description, price, image_path, contact_phone, contact_phone_secondary, contact_note,
+             is_active, display_order, created_by, updated_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             String(req.body.name).trim(),
             req.body.description?.trim() || null,
             normalizePrice(req.body.price),
             imagePaths[0] || null,
+            req.body.contactPhone?.trim() || null,
+            req.body.contactPhoneSecondary?.trim() || null,
+            req.body.contactNote?.trim() || null,
             toBoolean(req.body.isActive, true) ? 1 : 0,
             toInteger(req.body.displayOrder, "displayOrder", 0),
             req.user.id,
@@ -141,6 +146,14 @@ router.put(
           name: req.body.name !== undefined ? String(req.body.name).trim() : undefined,
           description: req.body.description !== undefined ? req.body.description?.trim() || null : undefined,
           price: req.body.price !== undefined ? normalizePrice(req.body.price) : undefined,
+          contact_phone:
+            req.body.contactPhone !== undefined ? req.body.contactPhone?.trim() || null : undefined,
+          contact_phone_secondary:
+            req.body.contactPhoneSecondary !== undefined
+              ? req.body.contactPhoneSecondary?.trim() || null
+              : undefined,
+          contact_note:
+            req.body.contactNote !== undefined ? req.body.contactNote?.trim() || null : undefined,
           is_active: req.body.isActive !== undefined ? (toBoolean(req.body.isActive) ? 1 : 0) : undefined,
           display_order:
             req.body.displayOrder !== undefined

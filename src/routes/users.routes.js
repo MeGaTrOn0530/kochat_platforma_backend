@@ -9,11 +9,61 @@ import { requireFields, toNullableInt } from "../utils/validation.js";
 import { logActivity } from "../utils/activity.js";
 import { sendCreated, sendOk } from "../utils/http.js";
 import { normalizeRole, toPublicUser } from "../utils/roles.js";
+import {
+  assertStrongPassword,
+  assertValidUsername,
+  ensureUniqueFieldsPayload,
+} from "../utils/security.js";
 import { removeUploadedFiles, saveProfileImages } from "../utils/upload-storage.js";
+import { clearAuthCookie } from "../utils/auth-cookie.js";
 
 const router = Router();
 
 router.use(authenticate);
+
+async function ensureUniqueAccountFields(pool, { username, email }, excludeUserId = null) {
+  if (!username && !email) {
+    return;
+  }
+
+  const conditions = [];
+  const params = [];
+
+  if (username) {
+    conditions.push("username = ?");
+    params.push(username);
+  }
+
+  if (email) {
+    conditions.push("email = ?");
+    params.push(email);
+  }
+
+  let sql = `SELECT id, username, email
+             FROM users
+             WHERE (${conditions.join(" OR ")})`;
+
+  if (excludeUserId) {
+    sql += " AND id <> ?";
+    params.push(excludeUserId);
+  }
+
+  sql += " LIMIT 1";
+
+  const existing = await fetchOne(pool, sql, params);
+
+  if (!existing) {
+    return;
+  }
+
+  if (username && existing.username === username) {
+    throw new AppError("Bu username allaqachon band.", 409);
+  }
+
+  if (email && existing.email === email) {
+    throw new AppError("Bu email allaqachon band.", 409);
+  }
+}
 
 router.get(
   "/me",
@@ -57,6 +107,7 @@ router.patch(
 
     let passwordHash;
     if (req.body.newPassword) {
+      assertStrongPassword(req.body.newPassword);
       requireFields(req.body, ["currentPassword"]);
       const passwordMatches = await bcrypt.compare(req.body.currentPassword, existingUser.password_hash);
 
@@ -79,10 +130,18 @@ router.patch(
       }
     }
 
+    const uniqueFields = ensureUniqueFieldsPayload(
+      req.body.username ?? existingUser.username,
+      req.body.email ?? existingUser.email
+    );
+
+    assertValidUsername(uniqueFields.username);
+    await ensureUniqueAccountFields(pool, uniqueFields, req.user.id);
+
     const updates = buildUpdateColumns({
       full_name: req.body.fullName,
-      username: req.body.username,
-      email: req.body.email,
+      username: req.body.username !== undefined ? uniqueFields.username : undefined,
+      email: req.body.email !== undefined ? uniqueFields.email : undefined,
       phone: req.body.phone,
       password_hash: passwordHash,
       avatar_path: avatarPath,
@@ -112,7 +171,31 @@ router.patch(
       [req.user.id]
     );
 
-    return sendOk(res, toPublicUser(updatedUser), "Profil yangilandi.");
+    if (passwordHash) {
+      await pool.query(
+        "UPDATE auth_sessions SET logged_out_at = NOW() WHERE user_id = ? AND logged_out_at IS NULL",
+        [req.user.id]
+      );
+      clearAuthCookie(res);
+
+      return sendOk(
+        res,
+        {
+          user: toPublicUser(updatedUser),
+          requiresReauth: true,
+        },
+        "Parol yangilandi. Qayta login qiling."
+      );
+    }
+
+    return sendOk(
+      res,
+      {
+        user: toPublicUser(updatedUser),
+        requiresReauth: false,
+      },
+      "Profil yangilandi."
+    );
   })
 );
 
@@ -170,6 +253,11 @@ router.post(
     const pool = getPool();
     const locationId = toNullableInt(req.body.locationId, "locationId");
     const role = normalizeRole(req.body.role);
+    const uniqueFields = ensureUniqueFieldsPayload(req.body.username, req.body.email);
+
+    assertValidUsername(uniqueFields.username);
+    assertStrongPassword(req.body.password);
+    await ensureUniqueAccountFields(pool, uniqueFields);
 
     if (locationId) {
       const location = await fetchOne(pool, "SELECT id FROM locations WHERE id = ? LIMIT 1", [locationId]);
@@ -186,8 +274,8 @@ router.post(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         fullName,
-        req.body.username,
-        req.body.email || null,
+        uniqueFields.username,
+        uniqueFields.email,
         req.body.phone || null,
         passwordHash,
         role,
@@ -242,13 +330,20 @@ router.put(
 
     let passwordHash;
     if (req.body.password) {
+      assertStrongPassword(req.body.password);
       passwordHash = await bcrypt.hash(req.body.password, 10);
     }
 
+    const uniqueFields = ensureUniqueFieldsPayload(req.body.username, req.body.email);
+    if (uniqueFields.username) {
+      assertValidUsername(uniqueFields.username);
+    }
+    await ensureUniqueAccountFields(pool, uniqueFields, userId);
+
     const updates = buildUpdateColumns({
       full_name: req.body.fullName || req.body.name,
-      username: req.body.username,
-      email: req.body.email,
+      username: uniqueFields.username,
+      email: uniqueFields.email,
       phone: req.body.phone,
       password_hash: passwordHash,
       role: req.body.role !== undefined ? normalizeRole(req.body.role) : undefined,
@@ -261,6 +356,13 @@ router.put(
     }
 
     await pool.query(`UPDATE users SET ${updates.sql} WHERE id = ?`, [...updates.values, userId]);
+
+    if (passwordHash) {
+      await pool.query(
+        "UPDATE auth_sessions SET logged_out_at = NOW() WHERE user_id = ? AND logged_out_at IS NULL",
+        [userId]
+      );
+    }
 
     await logActivity(pool, {
       actorUserId: req.user.id,

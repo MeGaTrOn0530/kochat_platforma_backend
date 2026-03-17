@@ -37,7 +37,7 @@ export async function authenticate(req, res, next) {
               u.role, u.location_id, u.avatar_path, u.status
        FROM auth_sessions s
        JOIN users u ON u.id = s.user_id
-       WHERE s.id = ? AND s.jti = ? AND s.logged_out_at IS NULL
+       WHERE s.id = ? AND s.jti = ? AND s.logged_out_at IS NULL AND s.expires_at > NOW()
        LIMIT 1`,
       [payload.sessionId, payload.jti]
     );

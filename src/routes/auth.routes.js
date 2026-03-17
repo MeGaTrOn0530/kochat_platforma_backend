@@ -9,15 +9,20 @@ import AppError from "../utils/app-error.js";
 import { fetchOne } from "../utils/db-helpers.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { requireFields } from "../utils/validation.js";
+import { createRateLimiter, getRateLimitIp } from "../middlewares/rate-limit.middleware.js";
 import { logActivity } from "../utils/activity.js";
 import { sendOk } from "../utils/http.js";
 import { toPublicUser } from "../utils/roles.js";
+import { clearAuthCookie, setAuthCookie } from "../utils/auth-cookie.js";
 
 const router = Router();
-
-function sessionExpiresAt() {
-  return new Date(Date.now() + env.jwtExpiresHours * 60 * 60 * 1000);
-}
+const loginRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 7,
+  keyGenerator: (req) =>
+    `${getRateLimitIp(req)}:login:${String(req.body?.username || req.body?.login || "").trim().toLowerCase()}`,
+  message: "Login urinishlari juda ko'p. 15 daqiqadan keyin qayta urinib ko'ring.",
+});
 
 function signToken(userId, role, sessionId, jti) {
   return jwt.sign(
@@ -34,26 +39,10 @@ function signToken(userId, role, sessionId, jti) {
   );
 }
 
-function setAuthCookie(res, token) {
-  res.cookie(env.cookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.nodeEnv === "production"
-  });
-}
-
-function clearAuthCookie(res) {
-  res.clearCookie(env.cookieName, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.nodeEnv === "production"
-  });
-}
-
 async function startSession(pool, user, res, options = {}) {
   const sessionId = randomUUID();
   const jti = randomUUID();
-  const expiresAt = sessionExpiresAt();
+  const expiresAt = new Date(Date.now() + env.jwtExpiresHours * 60 * 60 * 1000);
   const token = signToken(user.id, user.role, sessionId, jti);
 
   await pool.query(
@@ -74,17 +63,17 @@ async function startSession(pool, user, res, options = {}) {
   setAuthCookie(res, token);
 
   return {
-    token,
     user: toPublicUser(user),
   };
 }
 
 router.post(
   "/login",
+  loginRateLimiter,
   asyncHandler(async (req, res) => {
     requireFields(req.body, ["password"]);
 
-    const username = req.body.username || req.body.login;
+    const username = String(req.body.username || req.body.login || "").trim();
 
     if (!username) {
       throw new AppError("username yoki login yuborilishi kerak.", 400);

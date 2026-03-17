@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { assertSecureProductionEnv, parseAllowedOrigins } from "../utils/security.js";
 
 dotenv.config();
 
@@ -26,7 +27,8 @@ const env = {
   jwtSecret: process.env.JWT_SECRET || "change_me_in_production",
   jwtExpiresHours: toInteger(process.env.JWT_EXPIRES_HOURS, 8),
   cookieName: process.env.COOKIE_NAME || "kochat_token",
-  corsOrigin: process.env.CORS_ORIGIN || "*",
+  corsOrigin:
+    process.env.CORS_ORIGIN || "http://localhost:5173,http://127.0.0.1:5173",
   autoInitDb: toBoolean(process.env.AUTO_INIT_DB, true),
   defaultAdminFullName: process.env.DEFAULT_ADMIN_FULL_NAME || "System Admin",
   defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || "admin",
@@ -34,5 +36,9 @@ const env = {
   defaultLocationName: process.env.DEFAULT_LOCATION_NAME || "Markaziy Ombor",
   defaultLocationCode: process.env.DEFAULT_LOCATION_CODE || "HQ"
 };
+
+env.allowedOrigins = parseAllowedOrigins(env.corsOrigin);
+
+assertSecureProductionEnv(env);
 
 export default env;

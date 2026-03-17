@@ -16,6 +16,38 @@ const MIME_EXTENSION_MAP = {
   "image/gif": ".gif",
 };
 
+function hasValidMagicBytes(buffer, mimeType) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) {
+    return false;
+  }
+
+  switch (mimeType) {
+    case "image/jpeg":
+      return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    case "image/png":
+      return (
+        buffer[0] === 0x89 &&
+        buffer[1] === 0x50 &&
+        buffer[2] === 0x4e &&
+        buffer[3] === 0x47 &&
+        buffer[4] === 0x0d &&
+        buffer[5] === 0x0a &&
+        buffer[6] === 0x1a &&
+        buffer[7] === 0x0a
+      );
+    case "image/gif":
+      return buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
+        buffer.subarray(0, 6).toString("ascii") === "GIF89a";
+    case "image/webp":
+      return (
+        buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+        buffer.subarray(8, 12).toString("ascii") === "WEBP"
+      );
+    default:
+      return false;
+  }
+}
+
 function parseDataUrl(dataUrl) {
   const match = String(dataUrl || "").match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) {
@@ -30,10 +62,16 @@ function parseDataUrl(dataUrl) {
     throw new AppError("Faqat jpg, png, webp yoki gif rasm yuklash mumkin.", 400);
   }
 
+  const buffer = Buffer.from(base64Payload, "base64");
+
+  if (!hasValidMagicBytes(buffer, mimeType)) {
+    throw new AppError("Rasm fayli buzilgan yoki soxta formatda yuborilgan.", 400);
+  }
+
   return {
     mimeType,
     extension,
-    buffer: Buffer.from(base64Payload, "base64"),
+    buffer,
   };
 }
 

@@ -25,6 +25,13 @@ const corsOptionsDelegate = (req, callback) => {
     });
   }
 
+  console.warn("CORS origin rad etildi", {
+    origin: requestOrigin,
+    host: req.get("host"),
+    forwardedHost: req.get("x-forwarded-host"),
+    forwardedProto: req.get("x-forwarded-proto"),
+    referer: req.get("referer"),
+  });
   return callback(new Error("CORS origin ruxsat etilmagan."));
 };
 

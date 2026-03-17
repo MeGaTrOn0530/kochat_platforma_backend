@@ -15,6 +15,70 @@ function normalizeOriginValue(value) {
   }
 }
 
+function tryParseUrl(value) {
+  try {
+    return new URL(String(value));
+  } catch {
+    return null;
+  }
+}
+
+function stripWwwPrefix(hostname) {
+  return String(hostname || "").replace(/^www\./i, "").toLowerCase();
+}
+
+function normalizeComparableOrigin(value) {
+  const parsedUrl = tryParseUrl(value);
+  if (!parsedUrl) {
+    return null;
+  }
+
+  return {
+    protocol: String(parsedUrl.protocol || "").toLowerCase(),
+    hostname: stripWwwPrefix(parsedUrl.hostname),
+    port: parsedUrl.port || "",
+  };
+}
+
+function isDefaultPort(protocol, port) {
+  if (!port) {
+    return true;
+  }
+
+  const normalizedProtocol = String(protocol || "").toLowerCase();
+
+  if (normalizedProtocol === "https:" && port === "443") {
+    return true;
+  }
+
+  if (normalizedProtocol === "http:" && port === "80") {
+    return true;
+  }
+
+  return false;
+}
+
+function areOriginsEquivalent(leftOrigin, rightOrigin) {
+  const left = normalizeComparableOrigin(leftOrigin);
+  const right = normalizeComparableOrigin(rightOrigin);
+
+  if (!left || !right) {
+    return false;
+  }
+
+  if (left.hostname !== right.hostname) {
+    return false;
+  }
+
+  const samePort = left.port === right.port;
+  const compatibleDefaultPorts =
+    isDefaultPort(left.protocol, left.port) && isDefaultPort(right.protocol, right.port);
+  const compatibleHttpPair =
+    ["http:", "https:"].includes(left.protocol) && ["http:", "https:"].includes(right.protocol);
+
+  return samePort || (compatibleDefaultPorts && compatibleHttpPair);
+}
+
 export function parseAllowedOrigins(rawValue) {
   return String(rawValue || "")
     .split(",")
@@ -123,7 +187,25 @@ export function isOriginTrusted(origin, env, req) {
     return false;
   }
 
-  return getTrustedOrigins(env, req).has(normalizedOrigin);
+  const trustedOrigins = Array.from(getTrustedOrigins(env, req));
+
+  if (trustedOrigins.includes(normalizedOrigin)) {
+    return true;
+  }
+
+  const currentOriginUrl = tryParseUrl(normalizedOrigin);
+  if (!currentOriginUrl) {
+    return false;
+  }
+
+  return trustedOrigins.some((trustedOrigin) => {
+    const trustedOriginUrl = tryParseUrl(trustedOrigin);
+    if (!trustedOriginUrl) {
+      return false;
+    }
+
+    return areOriginsEquivalent(currentOriginUrl.origin, trustedOriginUrl.origin);
+  });
 }
 
 export function assertStrongPassword(password) {

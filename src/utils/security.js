@@ -1,21 +1,27 @@
 import AppError from "./app-error.js";
 
 const DEFAULT_JWT_SECRET = "change_me_in_production";
-const DEFAULT_ADMIN_PASSWORD = "Admin123!";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function normalizeOriginValue(value) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(String(value)).origin;
+  } catch {
+    return String(value).trim().replace(/\/+$/, "");
+  }
+}
 
 export function parseAllowedOrigins(rawValue) {
   return String(rawValue || "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean)
-    .map((item) => {
-      try {
-        return new URL(item).origin;
-      } catch {
-        return item.replace(/\/+$/, "");
-      }
-    });
+    .map((item) => normalizeOriginValue(item))
+    .filter(Boolean);
 }
 
 export function assertSecureProductionEnv(env) {
@@ -24,6 +30,7 @@ export function assertSecureProductionEnv(env) {
   }
 
   const missing = [];
+  const wantsBootstrapAdmin = Boolean(env.defaultAdminUsername || env.defaultAdminPassword);
 
   if (!env.jwtSecret || env.jwtSecret === DEFAULT_JWT_SECRET) {
     missing.push("JWT_SECRET");
@@ -37,8 +44,20 @@ export function assertSecureProductionEnv(env) {
     missing.push("CORS_ORIGIN");
   }
 
-  if (!env.defaultAdminPassword || env.defaultAdminPassword === DEFAULT_ADMIN_PASSWORD) {
-    missing.push("DEFAULT_ADMIN_PASSWORD");
+  if (wantsBootstrapAdmin) {
+    if (!env.defaultAdminUsername) {
+      missing.push("DEFAULT_ADMIN_USERNAME");
+    }
+
+    if (!env.defaultAdminPassword) {
+      missing.push("DEFAULT_ADMIN_PASSWORD");
+    } else {
+      try {
+        assertStrongPassword(env.defaultAdminPassword);
+      } catch {
+        missing.push("DEFAULT_ADMIN_PASSWORD");
+      }
+    }
   }
 
   if (missing.length > 0) {
@@ -55,23 +74,56 @@ export function isSafeMethod(method) {
 export function extractRequestOrigin(req) {
   const origin = req.get("origin");
   if (origin) {
-    try {
-      return new URL(origin).origin;
-    } catch {
-      return null;
-    }
+    return normalizeOriginValue(origin);
   }
 
   const referer = req.get("referer");
   if (referer) {
-    try {
-      return new URL(referer).origin;
-    } catch {
-      return null;
-    }
+    return normalizeOriginValue(referer);
   }
 
   return null;
+}
+
+export function getRequestPublicOrigin(req) {
+  const forwardedProto = String(req.get("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim();
+  const forwardedHost = String(req.get("x-forwarded-host") || "")
+    .split(",")[0]
+    .trim();
+  const host = forwardedHost || req.get("host");
+  const protocol = forwardedProto || req.protocol || "http";
+
+  if (!host) {
+    return null;
+  }
+
+  return normalizeOriginValue(`${protocol}://${host}`);
+}
+
+export function getTrustedOrigins(env, req) {
+  const trustedOrigins = new Set(env.allowedOrigins || []);
+  const requestPublicOrigin = getRequestPublicOrigin(req);
+
+  if (requestPublicOrigin) {
+    trustedOrigins.add(requestPublicOrigin);
+  }
+
+  return trustedOrigins;
+}
+
+export function isOriginTrusted(origin, env, req) {
+  if (!origin || env.corsOrigin === "*") {
+    return true;
+  }
+
+  const normalizedOrigin = normalizeOriginValue(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  return getTrustedOrigins(env, req).has(normalizedOrigin);
 }
 
 export function assertStrongPassword(password) {

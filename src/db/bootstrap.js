@@ -465,29 +465,31 @@ export async function ensureDatabaseReady() {
       locationId = locationResult.insertId;
     }
 
-    const [userRows] = await dbConnection.query(
-      "SELECT id FROM users WHERE username = ? LIMIT 1",
-      [env.defaultAdminUsername]
-    );
-
-    if (!userRows[0]) {
-      const passwordHash = await bcrypt.hash(env.defaultAdminPassword, 10);
-
-      await dbConnection.query(
-        `INSERT INTO users
-          (full_name, username, password_hash, role, location_id, status)
-         VALUES (?, ?, ?, 'admin', ?, 'active')`,
-        [env.defaultAdminFullName, env.defaultAdminUsername, passwordHash, locationId]
+    if (env.defaultAdminUsername && env.defaultAdminPassword) {
+      const [userRows] = await dbConnection.query(
+        "SELECT id FROM users WHERE username = ? LIMIT 1",
+        [env.defaultAdminUsername]
       );
-    } else {
-      await dbConnection.query(
-        `UPDATE users
-         SET role = 'admin',
-             location_id = COALESCE(location_id, ?),
-             status = COALESCE(NULLIF(status, ''), 'active')
-         WHERE username = ?`,
-        [locationId, env.defaultAdminUsername]
-      );
+
+      if (!userRows[0]) {
+        const passwordHash = await bcrypt.hash(env.defaultAdminPassword, 10);
+
+        await dbConnection.query(
+          `INSERT INTO users
+            (full_name, username, password_hash, role, location_id, status)
+           VALUES (?, ?, ?, 'admin', ?, 'active')`,
+          [env.defaultAdminFullName, env.defaultAdminUsername, passwordHash, locationId]
+        );
+      } else {
+        await dbConnection.query(
+          `UPDATE users
+           SET role = 'admin',
+               location_id = COALESCE(location_id, ?),
+               status = COALESCE(NULLIF(status, ''), 'active')
+           WHERE username = ?`,
+          [locationId, env.defaultAdminUsername]
+        );
+      }
     }
   } finally {
     await dbConnection.end();

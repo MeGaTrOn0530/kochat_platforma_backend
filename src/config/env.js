@@ -31,8 +31,8 @@ const env = {
     process.env.CORS_ORIGIN || "http://localhost:5173,http://127.0.0.1:5173",
   autoInitDb: toBoolean(process.env.AUTO_INIT_DB, true),
   defaultAdminFullName: process.env.DEFAULT_ADMIN_FULL_NAME || "System Admin",
-  defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || "admin",
-  defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || "Admin123!",
+  defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || "",
+  defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || "",
   defaultLocationName: process.env.DEFAULT_LOCATION_NAME || "Markaziy Ombor",
   defaultLocationCode: process.env.DEFAULT_LOCATION_CODE || "HQ"
 };

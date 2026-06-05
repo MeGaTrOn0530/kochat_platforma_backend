@@ -99,9 +99,9 @@ app.use(
 app.use(cors(corsOptionsDelegate));
 app.use(morgan("dev"));
 
-// JSON hajmini cheklash — 2mb API uchun yetarli, 15mb kerak emas
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+// JSON limit: rasm base64 (≤5MB) + JSON overhead uchun 15mb
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 app.use(cookieParser());
 
 app.use((req, res, next) => {

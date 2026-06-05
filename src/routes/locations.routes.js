@@ -160,8 +160,7 @@ router.delete(
       { sql: "SELECT COUNT(*) AS total FROM users WHERE location_id = ?", label: "foydalanuvchilar" },
       { sql: "SELECT COUNT(*) AS total FROM seedling_inventory WHERE location_id = ?", label: "inventar yozuvlari" },
       {
-        sql: "SELECT COUNT(*) AS total FROM seedling_batches WHERE location_id = ? OR source_location_id = ?",
-        params: [locationId, locationId],
+        sql: "SELECT COUNT(*) AS total FROM seedling_batches WHERE source_location_id = ?",
         label: "partiyalar",
       },
       {

@@ -13,6 +13,7 @@ import {
   getNotificationRecipientIds,
   getOrderNotificationRecipientIds
 } from "../utils/notifications.js";
+import { sendTelegramNotification, msgNewOrder, msgOrderSold } from "../utils/telegram.js";
 import {
   assertEnoughStock,
   ensureLocationExists,
@@ -275,7 +276,9 @@ router.post(
           throw new AppError(`Batch #${batchId} uchun ushbu lokatsiyada inventar topilmadi.`, 404);
         }
 
-        assertEnoughStock(inventory, quantity);
+        // Bron logikasi: mavjud miqdordan oshsa ham buyurtma qabul qilinadi
+        const available = Number(inventory.quantity_available || 0);
+        const itemShortage = Math.max(0, quantity - available);
 
         const totalPrice = quantity * unitPrice;
         totalQuantity += quantity;
@@ -310,9 +313,14 @@ router.post(
           varietyId: orderVarietyId,
           quantity,
           unitPrice,
-          totalPrice
+          totalPrice,
+          shortage: itemShortage
         });
       }
+
+      const totalShortage = parsedItems.reduce((sum, item) => sum + item.shortage, 0);
+      const orderStatus = totalShortage > 0 ? 'partial' : 'new';
+      const expectedDate = req.body.expectedDate ? new Date(req.body.expectedDate) : null;
 
       const orderNumber = req.body.orderNumber || generateCode("ORD");
       const location = await fetchOne(
@@ -323,21 +331,24 @@ router.post(
       const [orderResult] = await conn.query(
         `INSERT INTO orders
           (order_number, client_name, customer_name, customer_phone, location_id, status, order_date, note, notes,
-           total_amount, total_quantity, quantity, fulfilled_quantity, shortage_quantity, batch_id,
+           total_amount, total_quantity, quantity, fulfilled_quantity, shortage_quantity, expected_date, batch_id,
            seedling_type_id, variety_id, created_by)
-         VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
         [
           orderNumber,
           req.body.customerName,
           req.body.customerName,
           req.body.customerPhone || null,
           locationId,
+          orderStatus,
           orderDate,
           req.body.notes || null,
           req.body.notes || null,
           totalAmount,
           totalQuantity,
           totalQuantity,
+          totalShortage,
+          expectedDate,
           parsedItems[0]?.batchId || null,
           parsedItems[0]?.seedlingTypeId || null,
           parsedItems[0]?.varietyId || null,
@@ -377,13 +388,26 @@ router.post(
       return {
         id: orderResult.insertId,
         orderNumber,
-        status: "new",
+        status: orderStatus,
         locationId,
         totalQuantity,
         totalAmount,
+        shortageQuantity: totalShortage,
+        immediateQuantity: totalQuantity - totalShortage,
+        expectedDate: expectedDate ? expectedDate.toISOString().slice(0, 10) : null,
         createdAt: orderDate.toISOString()
       };
     });
+
+    // Telegram bildirishnoma (asinxron, kutmaymiz)
+    const pool = getPool();
+    sendTelegramNotification(pool, "notify_new_order", msgNewOrder({
+      orderNumber: result.orderNumber,
+      customerName: req.body.customerName || "—",
+      quantity: result.totalQuantity,
+      totalAmount: result.totalAmount,
+      locationName: req.body.locationName,
+    })).catch(() => {});
 
     return sendCreated(res, result, "Order yaratildi.");
   })
@@ -499,7 +523,154 @@ router.post(
       };
     });
 
+    // Telegram bildirishnoma
+    const pool = getPool();
+    sendTelegramNotification(pool, "notify_order_sold", msgOrderSold({
+      orderNumber: result.orderNumber,
+      customerName: result.customerName || "—",
+      quantity: result.totalQuantity,
+      totalAmount: result.totalAmount,
+      soldByName: req.user.fullName || req.user.username,
+    })).catch(() => {});
+
     return sendOk(res, result, "Order sotildi.");
+  })
+);
+
+// Qisman berish: shortage_quantity dan kamaytirish
+router.post(
+  "/:id/partial-fulfill",
+  authorize("admin", "agranom"),
+  asyncHandler(async (req, res) => {
+    const result = await withTransaction(async (conn) => {
+      const orderId = toPositiveInt(req.params.id, "orderId");
+      const deliverQuantity = toPositiveInt(req.body.deliverQuantity, "deliverQuantity");
+      const notes = req.body.notes || null;
+
+      const order = await fetchOne(
+        conn,
+        "SELECT * FROM orders WHERE id = ? LIMIT 1 FOR UPDATE",
+        [orderId]
+      );
+
+      if (!order) throw new AppError("Buyurtma topilmadi.", 404);
+      if (["completed", "cancelled"].includes(order.status)) {
+        throw new AppError("Bu buyurtma allaqachon yakunlangan yoki bekor qilingan.", 400);
+      }
+
+      const remainingShortage = Number(order.shortage_quantity || 0);
+      if (remainingShortage <= 0) {
+        throw new AppError("Bu buyurtmada bron qilingan qoldiq yo'q.", 400);
+      }
+      if (deliverQuantity > remainingShortage) {
+        throw new AppError(
+          `Berilayotgan miqdor (${deliverQuantity}) bron qoldiqdan (${remainingShortage}) ko'p bo'lmasligi kerak.`,
+          400
+        );
+      }
+
+      // Inventardagi mavjud miqdorni tekshirish
+      const items = await conn.query(
+        `SELECT oi.*, si.quantity_available
+         FROM order_items oi
+         JOIN seedling_inventory si ON si.id = oi.inventory_id
+         WHERE oi.order_id = ?`,
+        [orderId]
+      );
+      const itemRows = items[0];
+      if (!itemRows.length) throw new AppError("Order itemlari topilmadi.", 400);
+
+      // Birinchi item bo'yicha inventardan kamaytirish (oddiy holat: 1 ta batch)
+      let toDeliver = deliverQuantity;
+      for (const item of itemRows) {
+        if (toDeliver <= 0) break;
+        const available = Number(item.quantity_available || 0);
+        if (available <= 0) continue;
+
+        const takeFromItem = Math.min(toDeliver, available);
+        assertEnoughStock({ quantity_available: available }, takeFromItem);
+
+        await conn.query(
+          `UPDATE seedling_inventory SET quantity_available = quantity_available - ?, updated_at = NOW()
+           WHERE id = ?`,
+          [takeFromItem, item.inventory_id]
+        );
+        await conn.query(
+          `INSERT INTO seedling_history
+             (batch_id, action_type, quantity, note, performed_by, action_date, stage_before, stage_after)
+           SELECT b.id, 'order_sale', ?, ?, ?, NOW(), si.current_stage, si.current_stage
+           FROM seedling_inventory si
+           JOIN seedling_batches b ON b.id = si.batch_id
+           WHERE si.id = ?
+           LIMIT 1`,
+          [takeFromItem, notes || `Qisman berish — buyurtma #${order.order_number}`, req.user.id, item.inventory_id]
+        );
+        toDeliver -= takeFromItem;
+      }
+
+      if (toDeliver > 0) {
+        throw new AppError(`Inventarda yetarli ko'chat yo'q. ${toDeliver} ta yetishmaydi.`, 400);
+      }
+
+      const newFulfilled = Number(order.fulfilled_quantity || 0) + deliverQuantity;
+      const newShortage = Number(order.total_quantity) - newFulfilled;
+      const newStatus = newShortage <= 0 ? "completed" : "partial";
+
+      await conn.query(
+        `UPDATE orders
+         SET fulfilled_quantity = ?, shortage_quantity = ?, status = ?,
+             updated_at = NOW()
+             ${newStatus === "completed" ? ", sold_by = ?, sold_at = NOW()" : ""}
+         WHERE id = ?`,
+        newStatus === "completed"
+          ? [newFulfilled, 0, newStatus, req.user.id, orderId]
+          : [newFulfilled, newShortage, newStatus, orderId]
+      );
+
+      if (notes) {
+        await conn.query(
+          "UPDATE orders SET notes = CONCAT(COALESCE(notes,''), ?, '') WHERE id = ?",
+          [`\n[Qisman berish ${deliverQuantity} ta]: ${notes}`, orderId]
+        );
+      }
+
+      await logActivity(conn, {
+        actorUserId: req.user.id,
+        action: "order_partial_fulfilled",
+        entityType: "order",
+        entityId: orderId,
+        description: `${order.order_number}: ${deliverQuantity} ta berildi (qoldi: ${newShortage})`,
+        metadata: { deliverQuantity, newFulfilled, newShortage, newStatus }
+      });
+
+      const recipientIds = await getNotificationRecipientIds(conn, {
+        roles: ["admin", "bosh_agranom"],
+        locationIds: [order.location_id],
+        excludeUserIds: [req.user.id],
+      });
+      await createNotifications(conn, recipientIds, {
+        type: "order_partial_fulfilled",
+        title: newStatus === "completed" ? "Buyurtma to'liq bajarildi" : "Buyurtma qisman bajarildi",
+        message: newStatus === "completed"
+          ? `${order.order_number} buyurtmasi to'liq bajarildi`
+          : `${order.order_number}: ${deliverQuantity} ta berildi, ${newShortage} ta bron qoldi`,
+        entityType: "order",
+        entityId: orderId,
+        locationId: order.location_id,
+        createdBy: req.user.id,
+      });
+
+      return {
+        id: orderId,
+        orderNumber: order.order_number,
+        status: newStatus,
+        fulfilledQuantity: newFulfilled,
+        shortageQuantity: newShortage,
+        deliveredNow: deliverQuantity
+      };
+    });
+
+    return sendOk(res, result, "Qisman berish muvaffaqiyatli bajarildi.");
   })
 );
 

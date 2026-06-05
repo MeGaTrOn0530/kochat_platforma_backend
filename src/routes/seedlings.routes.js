@@ -9,6 +9,7 @@ import { logActivity } from "../utils/activity.js";
 import { sendCreated, sendOk } from "../utils/http.js";
 import { generateCode } from "../utils/code-generator.js";
 import { saveSeedlingImages } from "../utils/upload-storage.js";
+import { buildSeedlingBatchCodeArtifacts, parseSeedlingBatchCode } from "../utils/seedling-code.js";
 import {
   createNotifications,
   getNotificationRecipientIds,
@@ -105,6 +106,101 @@ async function resolveCatalogSelection(conn, rawSeedlingTypeId, rawVarietyId) {
   };
 }
 
+function serializePayloadJson(payload) {
+  try {
+    return JSON.stringify(payload ?? null);
+  } catch {
+    return null;
+  }
+}
+
+function withBatchCodeArtifacts(batch) {
+  const quantityAvailable = Number(batch?.quantity_available ?? batch?.healthy_quantity ?? 0);
+  const defectQuantity = Number(batch?.defect_quantity ?? batch?.defective_quantity ?? 0);
+  const artifacts = buildSeedlingBatchCodeArtifacts({
+    batchId: batch?.batch_id ?? batch?.id,
+    batchCode: batch?.batch_code ?? batch?.batch_number,
+    labelCodeType: batch?.label_code_type,
+    qrPayload: batch?.qr_payload,
+    barcodeValue: batch?.barcode_value,
+    quantity: batch?.initial_quantity ?? quantityAvailable + defectQuantity,
+    receivedAt:
+      batch?.received_at_exact ??
+      batch?.batch_created_at ??
+      batch?.created_at ??
+      batch?.received_date ??
+      batch?.last_activity_at,
+    receivedDate: batch?.received_date,
+    locationId: batch?.source_location_id ?? batch?.location_id,
+    locationName: batch?.source_location_name ?? batch?.location_name,
+    seedlingTypeId: batch?.seedling_type_id,
+    seedlingTypeName: batch?.seedling_type_name,
+    varietyId: batch?.variety_id,
+    varietyName: batch?.variety_name,
+    rootstockTypeId: batch?.rootstock_type_id,
+    rootstockTypeName: batch?.rootstock_type_name,
+    notes: batch?.notes || "",
+  });
+
+  return {
+    ...batch,
+    label_code_type: artifacts.labelCodeType,
+    qr_payload: artifacts.qrPayload,
+    barcode_value: artifacts.barcodeValue,
+  };
+}
+
+async function fetchBatchForScan(conn, lookup, userLocationId) {
+  if (!lookup?.batchId && !lookup?.batchCode) {
+    return null;
+  }
+
+  const conditions = [];
+  const params = [Number(userLocationId || 0)];
+
+  if (lookup.batchId) {
+    conditions.push("b.id = ?");
+    params.push(toPositiveInt(lookup.batchId, "batchId"));
+  }
+
+  if (lookup.batchCode) {
+    conditions.push("b.batch_code = ?");
+    params.push(String(lookup.batchCode).trim());
+  }
+
+  const [rows] = await conn.query(
+    `SELECT b.id AS batch_id,
+            COALESCE(user_inventory.id, source_inventory.id) AS inventory_id,
+            COALESCE(user_inventory.location_id, source_inventory.location_id, b.source_location_id) AS location_id,
+            COALESCE(user_inventory.current_stage, source_inventory.current_stage, 'cassette') AS current_stage,
+            COALESCE(user_inventory.quantity_available, source_inventory.quantity_available, b.initial_quantity) AS quantity_available,
+            COALESCE(user_inventory.defect_quantity, source_inventory.defect_quantity, 0) AS defect_quantity,
+            COALESCE(user_inventory.last_activity_at, source_inventory.last_activity_at, b.updated_at, b.created_at) AS last_activity_at,
+            b.batch_code, b.received_date, b.initial_quantity, b.notes,
+            b.label_code_type, b.qr_payload, b.barcode_value, b.source_location_id,
+            b.created_at AS batch_created_at, b.updated_at,
+            st.id AS seedling_type_id, st.name AS seedling_type_name,
+            v.id AS variety_id, v.name AS variety_name,
+            rt.id AS rootstock_type_id, rt.name AS rootstock_type_name,
+            sl.name AS source_location_name
+     FROM seedling_batches b
+     LEFT JOIN seedling_inventory source_inventory
+       ON source_inventory.batch_id = b.id AND source_inventory.location_id = b.source_location_id
+     LEFT JOIN seedling_inventory user_inventory
+       ON user_inventory.batch_id = b.id AND user_inventory.location_id = ?
+     LEFT JOIN seedling_types st ON st.id = b.seedling_type_id
+     LEFT JOIN varieties v ON v.id = b.variety_id
+     LEFT JOIN rootstock_types rt ON rt.id = b.rootstock_type_id
+     LEFT JOIN locations sl ON sl.id = b.source_location_id
+     WHERE ${conditions.join(" OR ")}
+     ORDER BY b.id DESC
+     LIMIT 1`,
+    params
+  );
+
+  return rows[0] ? withBatchCodeArtifacts(rows[0]) : null;
+}
+
 router.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -172,11 +268,14 @@ router.get(
     const [rows] = await pool.query(
       `SELECT si.id AS inventory_id, si.batch_id, si.location_id, si.current_stage,
               si.quantity_available, si.defect_quantity, si.last_activity_at,
-              b.batch_code, b.received_date, b.initial_quantity, b.notes, b.created_at AS batch_created_at,
+              b.batch_code, b.received_date, b.initial_quantity, b.notes,
+              b.label_code_type, b.qr_payload, b.barcode_value, b.source_location_id,
+              b.created_at AS batch_created_at,
               st.id AS seedling_type_id, st.name AS seedling_type_name, st.code AS seedling_type_code,
               v.id AS variety_id, v.name AS variety_name, v.code AS variety_code,
               rt.id AS rootstock_type_id, rt.name AS rootstock_type_name, rt.code AS rootstock_type_code,
               l.name AS location_name, l.code AS location_code, l.type AS location_type,
+              sl.name AS source_location_name,
               last_history.last_history_id, last_history.created_by AS last_history_created_by,
               last_history.approved_by, last_history.approval_status, last_history.image_paths, last_history.stage_date,
               receive_history.stage_date AS received_at_exact, receive_history.next_stage AS received_stage
@@ -186,6 +285,7 @@ router.get(
        LEFT JOIN varieties v ON v.id = b.variety_id
        LEFT JOIN rootstock_types rt ON rt.id = b.rootstock_type_id
        JOIN locations l ON l.id = si.location_id
+       LEFT JOIN locations sl ON sl.id = b.source_location_id
        LEFT JOIN (
          SELECT h.inventory_id, h.id AS last_history_id, h.created_by, h.approved_by, h.approval_status, h.image_paths, h.stage_date
          FROM seedling_history h
@@ -211,7 +311,122 @@ router.get(
       params
     );
 
-    return sendOk(res, rows);
+    return sendOk(res, rows.map(withBatchCodeArtifacts));
+  })
+);
+
+router.post(
+  "/scan",
+  asyncHandler(async (req, res) => {
+    requireFields(req.body, ["code"]);
+
+    const result = await withTransaction(async (conn) => {
+      const parsedCode = parseSeedlingBatchCode(req.body.code);
+
+      if (!parsedCode) {
+        throw new AppError("Scan kodi bo'sh yoki noto'g'ri.", 400);
+      }
+
+      const batch = await fetchBatchForScan(conn, parsedCode.payload, req.user.locationId);
+
+      if (!batch) {
+        throw new AppError("Skaner qilingan batch topilmadi.", 404);
+      }
+
+      const [scanResult] = await conn.query(
+        `INSERT INTO seedling_scan_events
+          (batch_id, inventory_id, user_id, location_id, code_type, raw_code, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          batch.batch_id,
+          batch.inventory_id ?? null,
+          req.user.id,
+          req.user.locationId ?? batch.location_id ?? null,
+          parsedCode.codeType,
+          parsedCode.rawValue,
+          serializePayloadJson(parsedCode.payload),
+        ]
+      );
+
+      await logActivity(conn, {
+        actorUserId: req.user.id,
+        action: "seedling_scanned",
+        entityType: "batch",
+        entityId: batch.batch_id,
+        description: `${batch.batch_code} partiyasi skaner qilindi`,
+        metadata: {
+          scanId: scanResult.insertId,
+          codeType: parsedCode.codeType,
+          locationId: req.user.locationId ?? batch.location_id ?? null,
+        },
+      });
+
+      return {
+        scanId: scanResult.insertId,
+        codeType: parsedCode.codeType,
+        scannedAt: new Date().toISOString(),
+        assignedUserId: req.user.id,
+        assignedLocationId: req.user.locationId ?? batch.location_id ?? null,
+        batch,
+      };
+    });
+
+    return sendCreated(res, result, "QR/barcode muvaffaqiyatli skaner qilindi.");
+  })
+);
+
+router.get(
+  "/scans/me",
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
+    const [rows] = await pool.query(
+      `SELECT s.id AS scan_id, s.code_type, s.raw_code, s.payload_json, s.created_at AS scanned_at,
+              b.id AS batch_id, b.batch_code, b.received_date, b.initial_quantity, b.notes,
+              b.label_code_type, b.qr_payload, b.barcode_value, b.source_location_id,
+              b.created_at AS batch_created_at, b.updated_at,
+              st.id AS seedling_type_id, st.name AS seedling_type_name,
+              v.id AS variety_id, v.name AS variety_name,
+              rt.id AS rootstock_type_id, rt.name AS rootstock_type_name,
+              COALESCE(scan_inventory.id, source_inventory.id) AS inventory_id,
+              COALESCE(scan_inventory.location_id, source_inventory.location_id, b.source_location_id) AS location_id,
+              COALESCE(scan_inventory.current_stage, source_inventory.current_stage, 'cassette') AS current_stage,
+              COALESCE(scan_inventory.quantity_available, source_inventory.quantity_available, b.initial_quantity) AS quantity_available,
+              COALESCE(scan_inventory.defect_quantity, source_inventory.defect_quantity, 0) AS defect_quantity,
+              COALESCE(scan_inventory.last_activity_at, source_inventory.last_activity_at, b.updated_at, b.created_at) AS last_activity_at,
+              sl.name AS source_location_name,
+              current_location.name AS location_name
+       FROM seedling_scan_events s
+       JOIN seedling_batches b ON b.id = s.batch_id
+       LEFT JOIN seedling_inventory scan_inventory ON scan_inventory.id = s.inventory_id
+       LEFT JOIN seedling_inventory source_inventory
+         ON source_inventory.batch_id = b.id AND source_inventory.location_id = b.source_location_id
+       LEFT JOIN seedling_types st ON st.id = b.seedling_type_id
+       LEFT JOIN varieties v ON v.id = b.variety_id
+       LEFT JOIN rootstock_types rt ON rt.id = b.rootstock_type_id
+       LEFT JOIN locations sl ON sl.id = b.source_location_id
+       LEFT JOIN locations current_location
+         ON current_location.id = COALESCE(scan_inventory.location_id, source_inventory.location_id, b.source_location_id)
+       WHERE s.user_id = ?
+       ORDER BY s.id DESC
+       LIMIT ?`,
+      [req.user.id, limit]
+    );
+
+    return sendOk(
+      res,
+      rows.map((row) => {
+        const batch = withBatchCodeArtifacts(row);
+
+        return {
+          id: row.scan_id,
+          codeType: row.code_type,
+          rawCode: row.raw_code,
+          scannedAt: row.scanned_at,
+          batch,
+        };
+      })
+    );
   })
 );
 
@@ -225,6 +440,9 @@ router.post(
       const locationId = toPositiveInt(req.body.locationId, "locationId");
       const quantity = toPositiveInt(req.body.quantity, "quantity");
       const stage = req.body.stage || "cassette";
+      const labelCodeType = String(req.body.labelCodeType || "qr").trim().toLowerCase() === "barcode"
+        ? "barcode"
+        : "qr";
       const requiresApproval = toBoolean(req.body.requiresApproval, false);
       const approvalStatus = requiresApproval ? "pending" : "approved";
       const batchCode = req.body.batchCode || generateCode("BATCH");
@@ -240,7 +458,7 @@ router.post(
         throw new AppError("Siz faqat o'zingizga biriktirilgan lokatsiyaga kirim qila olasiz.", 403);
       }
 
-      const { seedlingTypeId, varietyId, variety } = await resolveCatalogSelection(
+      const { seedlingTypeId, varietyId, seedlingType, variety } = await resolveCatalogSelection(
         conn,
         req.body.seedlingTypeId,
         req.body.varietyId
@@ -248,10 +466,10 @@ router.post(
       const rootstockTypeId = req.body.rootstockTypeId
         ? toPositiveInt(req.body.rootstockTypeId, "rootstockTypeId")
         : null;
-      await ensureLocationExists(conn, locationId);
-      if (rootstockTypeId) {
-        await ensureRootstockTypeExists(conn, rootstockTypeId);
-      }
+      const location = await ensureLocationExists(conn, locationId);
+      const rootstockType = rootstockTypeId
+        ? await ensureRootstockTypeExists(conn, rootstockTypeId)
+        : null;
 
       const batchColumns = [];
       const batchValues = [];
@@ -265,6 +483,7 @@ router.post(
         defective_quantity: 0,
         approval_status: approvalStatus,
         note: req.body.notes || null,
+        label_code_type: labelCodeType,
       };
 
       for (const [columnName, value] of Object.entries(optionalBatchFields)) {
@@ -315,6 +534,30 @@ router.post(
       );
 
       const inventoryId = inventoryResult.insertId;
+
+      const codeArtifacts = buildSeedlingBatchCodeArtifacts({
+        batchId,
+        batchCode,
+        labelCodeType,
+        quantity,
+        receivedAt: receivedAt.toISOString(),
+        receivedDate,
+        locationId: location.id,
+        locationName: location.name,
+        seedlingTypeId,
+        seedlingTypeName: seedlingType.name,
+        varietyId: variety.id,
+        varietyName: variety.name,
+        rootstockTypeId,
+        rootstockTypeName: rootstockType?.name ?? null,
+        notes: req.body.notes || "",
+      });
+
+      await updateSeedlingBatchCompatibility(conn, batchId, {
+        label_code_type: codeArtifacts.labelCodeType,
+        qr_payload: codeArtifacts.qrPayload,
+        barcode_value: codeArtifacts.barcodeValue,
+      });
 
       const [historyResult] = await conn.query(
         `INSERT INTO seedling_history
@@ -382,6 +625,32 @@ router.post(
         });
       }
 
+      // Har bir ko'chat uchun alohida dona kodlar yaratish
+      const unitPrefix = batchCode.replace(/^(BATCH|KO|KOCHAT|SEEDLING|URUG)-?/i, "").trim() || batchCode;
+      const unitInserts = [];
+      for (let i = 1; i <= quantity; i++) {
+        const unitCode = `PLT-${unitPrefix}-${String(i).padStart(4, "0")}`;
+        const unitQrPayload = unitCode; // faqat unitCode — kamera oson o'qiydi
+        unitInserts.push([batchId, i, unitCode, unitQrPayload, stage]);
+      }
+      if (unitInserts.length > 0) {
+        // Jadval mavjudligini tekshirib qo'shish
+        const [tableCheck] = await conn.query(
+          `SELECT 1 FROM information_schema.tables
+           WHERE table_schema = DATABASE() AND table_name = 'seedling_units' LIMIT 1`
+        );
+        if (tableCheck.length > 0) {
+          for (const unitRow of unitInserts) {
+            await conn.query(
+              `INSERT IGNORE INTO seedling_units
+                (batch_id, unit_number, unit_code, qr_payload, current_stage)
+               VALUES (?, ?, ?, ?, ?)`,
+              unitRow
+            );
+          }
+        }
+      }
+
       return {
         batchId,
         batchCode,
@@ -389,7 +658,10 @@ router.post(
         historyId: historyResult.insertId,
         quantity,
         stage,
-        approvalStatus
+        approvalStatus,
+        labelCodeType: codeArtifacts.labelCodeType,
+        qrPayload: codeArtifacts.qrPayload,
+        barcodeValue: codeArtifacts.barcodeValue,
       };
     });
 
@@ -672,6 +944,106 @@ router.post(
     });
 
     return sendOk(res, result, "History approve qilindi.");
+  })
+);
+
+// Partiya uchun alohida dona kodlar ro'yxati
+router.get(
+  "/units/:batchId",
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    const batchId = toPositiveInt(req.params.batchId, "batchId");
+
+    const batch = await fetchOne(
+      pool,
+      `SELECT b.id, b.batch_code, b.initial_quantity, b.received_date,
+              b.created_at, b.source_location_id,
+              sl.name AS location_name,
+              st.name AS seedling_type_name,
+              v.name AS variety_name,
+              COALESCE(si.quantity_available, 0) AS quantity_available,
+              COALESCE(si.defect_quantity, 0) AS defect_quantity,
+              COALESCE(si.current_stage, 'cassette') AS current_stage
+       FROM seedling_batches b
+       LEFT JOIN locations sl ON sl.id = b.source_location_id
+       LEFT JOIN seedling_types st ON st.id = b.seedling_type_id
+       LEFT JOIN varieties v ON v.id = b.variety_id
+       LEFT JOIN seedling_inventory si ON si.batch_id = b.id AND si.location_id = b.source_location_id
+       WHERE b.id = ? LIMIT 1`,
+      [batchId]
+    );
+
+    if (!batch) {
+      throw new AppError("Partiya topilmadi.", 404);
+    }
+
+    // Agar units yo'q bo'lsa, yaratib berish
+    const [tableCheck] = await pool.query(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'seedling_units' LIMIT 1`
+    );
+
+    let units = [];
+
+    if (tableCheck.length > 0) {
+      const [existing] = await pool.query(
+        `SELECT id, unit_number, unit_code, qr_payload, current_stage, is_defective, notes
+         FROM seedling_units WHERE batch_id = ? ORDER BY unit_number ASC`,
+        [batchId]
+      );
+
+      // Mavjud unitlarda JSON formatdagi qr_payload ni soda kodga o'zgartirish
+      if (existing.length > 0) {
+        const needsFixing = existing.some(
+          (u) => u.qr_payload && u.qr_payload !== u.unit_code &&
+                 (u.qr_payload.startsWith("{") || u.qr_payload.startsWith("KOCHAT-"))
+        );
+        if (needsFixing) {
+          await pool.query(
+            `UPDATE seedling_units SET qr_payload = unit_code
+             WHERE batch_id = ? AND (qr_payload LIKE '{%' OR qr_payload LIKE 'KOCHAT-%')`,
+            [batchId]
+          );
+          // Yangilangan ma'lumotni qayta o'qish
+          const [refreshed] = await pool.query(
+            `SELECT id, unit_number, unit_code, qr_payload, current_stage, is_defective, notes
+             FROM seedling_units WHERE batch_id = ? ORDER BY unit_number ASC`,
+            [batchId]
+          );
+          units = refreshed;
+        } else {
+          units = existing;
+        }
+      }
+
+      if (existing.length === 0 && batch.initial_quantity > 0) {
+        // Mavjud bo'lmasa, yaratish
+        const unitPrefix = batch.batch_code.replace(/^(BATCH|KO|KOCHAT|SEEDLING|URUG)-?/i, "").trim() || batch.batch_code;
+        const stage = batch.current_stage || "cassette";
+        const conn = pool;
+        for (let i = 1; i <= batch.initial_quantity; i++) {
+          const unitCode = `PLT-${unitPrefix}-${String(i).padStart(4, "0")}`;
+          const unitQrPayload = unitCode;
+          await conn.query(
+            `INSERT IGNORE INTO seedling_units
+              (batch_id, unit_number, unit_code, qr_payload, current_stage)
+             VALUES (?, ?, ?, ?, ?)`,
+            [batchId, i, unitCode, unitQrPayload, stage]
+          );
+        }
+
+        const [created] = await pool.query(
+          `SELECT id, unit_number, unit_code, qr_payload, current_stage, is_defective, notes
+           FROM seedling_units WHERE batch_id = ? ORDER BY unit_number ASC`,
+          [batchId]
+        );
+        units = created;
+      } else {
+        units = existing;
+      }
+    }
+
+    return sendOk(res, { batch, units });
   })
 );
 

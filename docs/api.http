@@ -13,6 +13,17 @@ Content-Type: application/json
   "password": "your_admin_password"
 }
 
+### Mobile login with bearer token
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+X-Kochat-Client: mobile
+
+{
+  "username": "your_admin_username",
+  "password": "your_admin_password",
+  "includeToken": true
+}
+
 ### Me
 GET {{baseUrl}}/api/auth/me
 Authorization: Bearer {{token}}
@@ -155,10 +166,24 @@ Content-Type: application/json
   "varietyId": 1,
   "locationId": 1,
   "quantity": 1000,
-  "stage": "received",
+  "stage": "cassette",
+  "labelCodeType": "qr",
   "notes": "Yangi partiya",
   "requiresApproval": true
 }
+
+### Seedlings scan
+POST {{baseUrl}}/api/seedlings/scan
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "code": "KOCHAT-BATCH-QR:v1:paste_scanned_payload_here"
+}
+
+### My scan history
+GET {{baseUrl}}/api/seedlings/scans/me?limit=20
+Authorization: Bearer {{token}}
 
 ### Seedlings stage change
 POST {{baseUrl}}/api/seedlings/stage-change

@@ -11,6 +11,7 @@ import reportsRoutes from "./reports.routes.js";
 import dashboardRoutes from "./dashboard.routes.js";
 import customerProductsRoutes from "./customer-products.routes.js";
 import notificationsRoutes from "./notifications.routes.js";
+import modulesRoutes from "./modules.routes.js";
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use("/reports", reportsRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/customer-products", customerProductsRoutes);
 router.use("/notifications", notificationsRoutes);
+router.use("/modules", modulesRoutes);
 
 export default router;

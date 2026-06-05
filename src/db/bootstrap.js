@@ -117,6 +117,9 @@ async function ensureLegacyCompatibility(connection) {
       received_date: "DATE NULL",
       initial_quantity: "INT NOT NULL DEFAULT 0",
       notes: "TEXT NULL",
+      label_code_type: "VARCHAR(20) NOT NULL DEFAULT 'qr'",
+      qr_payload: "LONGTEXT NULL",
+      barcode_value: "VARCHAR(255) NULL",
       created_by: "INT NULL",
       created_at: "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP",
       updated_at: "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
@@ -152,6 +155,16 @@ async function ensureLegacyCompatibility(connection) {
       reference_id: "INT NULL",
       notes: "TEXT NULL",
       created_by: "INT NULL",
+      created_at: "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+    },
+    seedling_scan_events: {
+      batch_id: "INT NULL",
+      inventory_id: "INT NULL",
+      user_id: "INT NULL",
+      location_id: "INT NULL",
+      code_type: "VARCHAR(20) NOT NULL DEFAULT 'qr'",
+      raw_code: "LONGTEXT NULL",
+      payload_json: "LONGTEXT NULL",
       created_at: "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
     },
     transfers: {
@@ -310,6 +323,14 @@ async function ensureLegacyCompatibility(connection) {
          WHERE batch_number IS NULL OR batch_number = ''`
       );
     }
+
+    if (await columnExists(connection, "seedling_batches", "label_code_type")) {
+      await connection.query(
+        `UPDATE seedling_batches
+         SET label_code_type = COALESCE(NULLIF(label_code_type, ''), 'qr')
+         WHERE label_code_type IS NULL OR label_code_type = ''`
+      );
+    }
   }
 
   if (await tableExists(connection, "transfers")) {
@@ -391,6 +412,17 @@ async function ensureLegacyCompatibility(connection) {
           OR shortage_quantity IS NULL`
     );
 
+    // Add expected_date column if missing
+    const [ordersColumns] = await connection.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'expected_date'`
+    );
+    if (!ordersColumns.length) {
+      await connection.query(
+        `ALTER TABLE orders ADD COLUMN expected_date DATE NULL AFTER shortage_quantity`
+      );
+    }
+
     if (await tableExists(connection, "order_items")) {
       await connection.query(
         `UPDATE orders o
@@ -408,6 +440,20 @@ async function ensureLegacyCompatibility(connection) {
       );
     }
   }
+}
+
+async function migrateUnitQrPayloads(connection) {
+  if (!(await tableExists(connection, "seedling_units"))) return;
+
+  // Eski JSON formatdagi qr_payload larni faqat unit_code ga o'zgartirish
+  // JSON format: {"type":"unit","unitCode":"PLT-...","unitNumber":1,...}
+  await connection.query(
+    `UPDATE seedling_units
+     SET qr_payload = unit_code
+     WHERE qr_payload IS NOT NULL
+       AND qr_payload != unit_code
+       AND (qr_payload LIKE '{%' OR qr_payload LIKE 'KOCHAT-%')`
+  );
 }
 
 export async function ensureDatabaseReady() {
@@ -446,6 +492,7 @@ export async function ensureDatabaseReady() {
     }
 
     await ensureLegacyCompatibility(dbConnection);
+    await migrateUnitQrPayloads(dbConnection);
     const unknownCatalog = await ensureUnknownCatalog(dbConnection);
     await seedDefaultCatalog(dbConnection, unknownCatalog);
 

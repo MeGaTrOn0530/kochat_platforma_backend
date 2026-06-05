@@ -34,7 +34,8 @@ const env = {
   defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || "",
   defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || "",
   defaultLocationName: process.env.DEFAULT_LOCATION_NAME || "Markaziy Ombor",
-  defaultLocationCode: process.env.DEFAULT_LOCATION_CODE || "HQ"
+  defaultLocationCode: process.env.DEFAULT_LOCATION_CODE || "HQ",
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
 };
 
 env.allowedOrigins = parseAllowedOrigins(env.corsOrigin);

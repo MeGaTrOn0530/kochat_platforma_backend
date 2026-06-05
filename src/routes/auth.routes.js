@@ -8,7 +8,7 @@ import asyncHandler from "../utils/async-handler.js";
 import AppError from "../utils/app-error.js";
 import { fetchOne } from "../utils/db-helpers.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
-import { requireFields } from "../utils/validation.js";
+import { requireFields, toBoolean } from "../utils/validation.js";
 import { createRateLimiter, getRateLimitIp } from "../middlewares/rate-limit.middleware.js";
 import { logActivity } from "../utils/activity.js";
 import { sendOk } from "../utils/http.js";
@@ -62,9 +62,17 @@ async function startSession(pool, user, res, options = {}) {
 
   setAuthCookie(res, token);
 
-  return {
+  const payload = {
     user: toPublicUser(user),
   };
+
+  if (options.includeToken) {
+    payload.token = token;
+    payload.tokenType = "Bearer";
+    payload.expiresAt = expiresAt.toISOString();
+  }
+
+  return payload;
 }
 
 router.post(
@@ -80,6 +88,11 @@ router.post(
     }
 
     const pool = getPool();
+    const includeToken =
+      toBoolean(req.body.includeToken, false) ||
+      String(req.headers["x-kochat-client"] || "")
+        .trim()
+        .toLowerCase() === "mobile";
     const user = await fetchOne(
       pool,
       `SELECT id, full_name, username, email, phone, password_hash, role, location_id, avatar_path,
@@ -107,6 +120,7 @@ router.post(
     const sessionPayload = await startSession(pool, user, res, {
       action: "login",
       description: `${user.full_name} tizimga kirdi`,
+      includeToken,
     });
 
     return sendOk(

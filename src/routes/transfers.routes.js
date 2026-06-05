@@ -13,6 +13,7 @@ import {
   getNotificationRecipientIds,
   getTransferNotificationRecipientIds
 } from "../utils/notifications.js";
+import { sendTelegramNotification, msgNewTransfer } from "../utils/telegram.js";
 import {
   assertEnoughStock,
   ensureLocationExists,
@@ -221,6 +222,16 @@ router.post(
         status: "pending_sender"
       };
     });
+
+    // Telegram bildirishnoma
+    const pool = getPool();
+    sendTelegramNotification(pool, "notify_transfer", msgNewTransfer({
+      batchCode: result.batchCode || "—",
+      fromLocation: result.fromLocationName || String(result.fromLocationId),
+      toLocation: result.toLocationName || String(result.toLocationId),
+      quantity: result.quantity,
+      createdByName: req.user.fullName || req.user.username,
+    })).catch(() => {});
 
     return sendCreated(res, result, "Transfer yaratildi.");
   })

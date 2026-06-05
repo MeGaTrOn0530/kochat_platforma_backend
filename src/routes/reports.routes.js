@@ -512,4 +512,188 @@ router.get(
   })
 );
 
+// Buyurtmalar hisoboti (orders-summary)
+router.get(
+  "/orders-summary",
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    const { conditions, params } = buildDateRange("o.created_at", req.query);
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const [byStatus] = await pool.query(
+      `SELECT status,
+              COUNT(*) AS cnt,
+              SUM(total_quantity) AS totalQty,
+              SUM(total_amount) AS totalAmount,
+              SUM(fulfilled_quantity) AS fulfilledQty,
+              SUM(shortage_quantity) AS shortageQty
+       FROM orders o ${whereClause}
+       GROUP BY status`,
+      params
+    );
+
+    const [topCustomers] = await pool.query(
+      `SELECT customer_name,
+              COUNT(*) AS orderCount,
+              SUM(total_quantity) AS totalQty,
+              SUM(total_amount) AS totalAmount
+       FROM orders o ${whereClause}
+       GROUP BY customer_name
+       ORDER BY totalQty DESC
+       LIMIT 10`,
+      params
+    );
+
+    const [byPeriod] = await pool.query(
+      `SELECT DATE_FORMAT(o.created_at, '%Y-%m') AS month,
+              COUNT(*) AS cnt,
+              SUM(total_quantity) AS totalQty,
+              SUM(fulfilled_quantity) AS fulfilledQty,
+              SUM(shortage_quantity) AS shortageQty,
+              SUM(total_amount) AS revenue
+       FROM orders o ${whereClause}
+       GROUP BY month
+       ORDER BY month DESC
+       LIMIT 24`,
+      params
+    );
+
+    const totals = byStatus.reduce(
+      (acc, row) => {
+        acc.totalOrdered += Number(row.totalQty || 0);
+        acc.totalFulfilled += Number(row.fulfilledQty || 0);
+        acc.totalBron += Number(row.shortageQty || 0);
+        acc.totalRevenue += Number(row.totalAmount || 0);
+        return acc;
+      },
+      { totalOrdered: 0, totalFulfilled: 0, totalBron: 0, totalRevenue: 0 }
+    );
+
+    return sendOk(res, { byStatus, topCustomers, byPeriod, totals });
+  })
+);
+
+// Moliyaviy hisobot
+router.get(
+  "/financial",
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    const { conditions, params } = buildDateRange("o.created_at", req.query);
+    const baseWhere = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const completedWhere = conditions.length > 0
+      ? `WHERE o.status = 'completed' AND ${conditions.join(" AND ")}`
+      : "WHERE o.status = 'completed'";
+
+    const [summary] = await pool.query(
+      `SELECT
+         SUM(o.total_amount) AS totalRevenue,
+         SUM(o.fulfilled_quantity) AS totalSoldQty,
+         COUNT(*) AS completedOrders,
+         ROUND(SUM(o.total_amount) / NULLIF(SUM(o.fulfilled_quantity), 0), 0) AS avgPricePerUnit
+       FROM orders o ${completedWhere}`,
+      params
+    );
+
+    const [byLocation] = await pool.query(
+      `SELECT l.name AS locationName,
+              COUNT(o.id) AS orderCount,
+              SUM(o.fulfilled_quantity) AS soldQty,
+              SUM(o.total_amount) AS revenue
+       FROM orders o
+       JOIN locations l ON l.id = o.location_id
+       ${completedWhere}
+       GROUP BY l.id, l.name
+       ORDER BY revenue DESC`,
+      params
+    );
+
+    const [byMonth] = await pool.query(
+      `SELECT DATE_FORMAT(o.sold_at, '%Y-%m') AS month,
+              COUNT(*) AS orderCount,
+              SUM(o.fulfilled_quantity) AS soldQty,
+              SUM(o.total_amount) AS revenue,
+              ROUND(SUM(o.total_amount) / NULLIF(SUM(o.fulfilled_quantity),0), 0) AS avgPrice
+       FROM orders o ${completedWhere}
+       GROUP BY month
+       ORDER BY month DESC
+       LIMIT 24`,
+      params
+    );
+
+    const [bySeedlingType] = await pool.query(
+      `SELECT COALESCE(st.name, 'Aniqlanmagan') AS seedlingTypeName,
+              SUM(oi.quantity) AS soldQty,
+              SUM(oi.total_price) AS revenue
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN seedling_batches b ON b.id = oi.batch_id
+       LEFT JOIN seedling_types st ON st.id = b.seedling_type_id
+       ${completedWhere.replace("o.status", "o.status")}
+       GROUP BY st.id, st.name
+       ORDER BY revenue DESC
+       LIMIT 20`,
+      params
+    );
+
+    return sendOk(res, {
+      summary: summary[0] || {},
+      byLocation,
+      byMonth,
+      bySeedlingType
+    });
+  })
+);
+
+// Ko'chat harakati tarixi (movements-full)
+router.get(
+  "/movements-full",
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    const { conditions, params } = buildDateRange("h.action_date", req.query);
+    if (req.query.locationId) {
+      conditions.push("(si.location_id = ? OR b.location_id = ?)");
+      params.push(Number(req.query.locationId), Number(req.query.locationId));
+    }
+    if (req.query.movementType) {
+      conditions.push("h.action_type = ?");
+      params.push(req.query.movementType);
+    }
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const [movements] = await pool.query(
+      `SELECT
+         h.id,
+         h.action_type AS movementType,
+         h.action_date AS movementDate,
+         h.quantity,
+         h.defect_quantity AS defectQty,
+         h.stage_before AS fromStage,
+         h.stage_after AS toStage,
+         h.note AS notes,
+         b.batch_code AS batchCode,
+         b.id AS batchId,
+         COALESCE(st.name, 'Aniqlanmagan') AS seedlingTypeName,
+         COALESCE(v.name, '') AS varietyName,
+         COALESCE(fromloc.name, '') AS fromLocationName,
+         COALESCE(toloc.name, COALESCE(l.name, '')) AS toLocationName,
+         CONCAT(u.first_name, ' ', COALESCE(u.last_name,'')) AS performedByName
+       FROM seedling_history h
+       JOIN seedling_batches b ON b.id = h.batch_id
+       LEFT JOIN seedling_inventory si ON si.batch_id = b.id
+       LEFT JOIN seedling_types st ON st.id = b.seedling_type_id
+       LEFT JOIN varieties v ON v.id = b.variety_id
+       LEFT JOIN locations l ON l.id = si.location_id
+       LEFT JOIN locations fromloc ON fromloc.id = h.from_location_id
+       LEFT JOIN locations toloc ON toloc.id = h.to_location_id
+       LEFT JOIN users u ON u.id = h.performed_by
+       ${whereClause}
+       ORDER BY h.action_date DESC
+       LIMIT 500`,
+      params
+    );
+
+    return sendOk(res, movements);
+  })
+);
+
 export default router;

@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS seedling_batches (
   received_date DATE NOT NULL,
   initial_quantity INT NOT NULL,
   notes TEXT NULL,
+  label_code_type VARCHAR(20) NOT NULL DEFAULT 'qr',
+  qr_payload LONGTEXT NULL,
+  barcode_value VARCHAR(255) NULL,
   created_by INT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -160,6 +163,29 @@ CREATE TABLE IF NOT EXISTS seedling_history (
   INDEX idx_history_approval_status (approval_status)
 );
 
+CREATE TABLE IF NOT EXISTS seedling_scan_events (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  batch_id INT NOT NULL,
+  inventory_id INT NULL,
+  user_id INT NULL,
+  location_id INT NULL,
+  code_type VARCHAR(20) NOT NULL DEFAULT 'qr',
+  raw_code LONGTEXT NULL,
+  payload_json LONGTEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (batch_id) REFERENCES seedling_batches(id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (inventory_id) REFERENCES seedling_inventory(id)
+    ON DELETE SET NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE SET NULL,
+  FOREIGN KEY (location_id) REFERENCES locations(id)
+    ON DELETE SET NULL,
+  INDEX idx_seedling_scan_events_batch_id (batch_id),
+  INDEX idx_seedling_scan_events_user_id (user_id),
+  INDEX idx_seedling_scan_events_location_id (location_id)
+);
+
 CREATE TABLE IF NOT EXISTS transfers (
   id INT AUTO_INCREMENT PRIMARY KEY,
   transfer_code VARCHAR(80) NOT NULL UNIQUE,
@@ -222,6 +248,7 @@ CREATE TABLE IF NOT EXISTS orders (
   quantity INT NOT NULL DEFAULT 0,
   fulfilled_quantity INT NOT NULL DEFAULT 0,
   shortage_quantity INT NOT NULL DEFAULT 0,
+  expected_date DATE NULL,
   batch_id INT NULL,
   seedling_type_id INT NULL,
   variety_id INT NULL,
@@ -326,6 +353,23 @@ CREATE TABLE IF NOT EXISTS notifications (
   INDEX idx_notifications_entity (entity_type, entity_id)
 );
 
+CREATE TABLE IF NOT EXISTS seedling_units (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  batch_id INT NOT NULL,
+  unit_number INT NOT NULL,
+  unit_code VARCHAR(120) NOT NULL UNIQUE,
+  qr_payload TEXT NULL,
+  current_stage VARCHAR(50) NOT NULL DEFAULT 'cassette',
+  is_defective TINYINT(1) NOT NULL DEFAULT 0,
+  notes TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (batch_id) REFERENCES seedling_batches(id)
+    ON DELETE CASCADE,
+  INDEX idx_units_batch_id (batch_id),
+  UNIQUE KEY uq_unit_batch_number (batch_id, unit_number)
+);
+
 CREATE TABLE IF NOT EXISTS activity_logs (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   actor_user_id INT NULL,
@@ -339,4 +383,162 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     ON DELETE SET NULL,
   INDEX idx_activity_created_at (created_at),
   INDEX idx_activity_entity (entity_type, entity_id)
+);
+
+-- ===== MODUL 1: MOLIYAVIY TIZIM =====
+CREATE TABLE IF NOT EXISTS payments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id INT NOT NULL,
+  amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+  payment_method VARCHAR(40) NOT NULL DEFAULT 'cash',
+  payment_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status VARCHAR(20) NOT NULL DEFAULT 'paid',
+  note TEXT NULL,
+  created_by INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_payments_order (order_id),
+  INDEX idx_payments_date (payment_date)
+);
+
+-- ===== MODUL 2: CRM — MIJOZLAR =====
+CREATE TABLE IF NOT EXISTS customers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  phone VARCHAR(40) NULL,
+  phone2 VARCHAR(40) NULL,
+  email VARCHAR(120) NULL,
+  address TEXT NULL,
+  notes TEXT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_by INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_customers_name (name),
+  INDEX idx_customers_active (is_active)
+);
+
+-- ===== MODUL 3: YETKAZIB BERISH =====
+CREATE TABLE IF NOT EXISTS deliveries (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id INT NULL,
+  customer_id INT NULL,
+  customer_name VARCHAR(160) NOT NULL,
+  address TEXT NOT NULL,
+  quantity INT NOT NULL DEFAULT 0,
+  delivery_date DATE NOT NULL,
+  delivery_time VARCHAR(20) NULL,
+  driver_name VARCHAR(120) NULL,
+  driver_phone VARCHAR(40) NULL,
+  vehicle VARCHAR(80) NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
+  note TEXT NULL,
+  created_by INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_deliveries_date (delivery_date),
+  INDEX idx_deliveries_status (status)
+);
+
+-- ===== MODUL 4: AGROTEXNIK JURNALI =====
+CREATE TABLE IF NOT EXISTS agro_journal (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  location_id INT NULL,
+  batch_id INT NULL,
+  action_type VARCHAR(50) NOT NULL,
+  action_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  quantity_used DECIMAL(10,2) NULL,
+  unit VARCHAR(30) NULL,
+  product_name VARCHAR(120) NULL,
+  description TEXT NULL,
+  performed_by INT NULL,
+  image_paths LONGTEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL,
+  FOREIGN KEY (performed_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_agro_date (action_date),
+  INDEX idx_agro_type (action_type),
+  INDEX idx_agro_location (location_id)
+);
+
+-- ===== MODUL 5: HR — DAVOMAT VA TOPSHIRIQLAR =====
+CREATE TABLE IF NOT EXISTS attendance (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  work_date DATE NOT NULL,
+  check_in TIME NULL,
+  check_out TIME NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'present',
+  note VARCHAR(255) NULL,
+  recorded_by INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE KEY uq_attendance (user_id, work_date),
+  INDEX idx_attendance_date (work_date)
+);
+
+CREATE TABLE IF NOT EXISTS employee_tasks (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  description TEXT NULL,
+  assigned_to INT NULL,
+  assigned_by INT NULL,
+  location_id INT NULL,
+  priority VARCHAR(20) NOT NULL DEFAULT 'normal',
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  due_date DATE NULL,
+  completed_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL,
+  INDEX idx_tasks_status (status),
+  INDEX idx_tasks_assigned (assigned_to)
+);
+
+-- ===== MODUL 6: TELEGRAM BOT SOZLAMALARI =====
+CREATE TABLE IF NOT EXISTS telegram_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  telegram_chat_id VARCHAR(80) NULL,
+  telegram_username VARCHAR(80) NULL,
+  notify_new_order TINYINT(1) NOT NULL DEFAULT 1,
+  notify_order_sold TINYINT(1) NOT NULL DEFAULT 1,
+  notify_transfer TINYINT(1) NOT NULL DEFAULT 1,
+  notify_low_stock TINYINT(1) NOT NULL DEFAULT 0,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_telegram_user (user_id)
+);
+
+-- ===== MODUL 7: SIFAT SERTIFIKATLARI =====
+CREATE TABLE IF NOT EXISTS certificates (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  certificate_number VARCHAR(80) NOT NULL UNIQUE,
+  batch_id INT NULL,
+  order_id INT NULL,
+  cert_type VARCHAR(50) NOT NULL DEFAULT 'quality',
+  issued_to VARCHAR(160) NOT NULL,
+  issued_by INT NULL,
+  issue_date DATE NOT NULL,
+  expiry_date DATE NULL,
+  seedling_type VARCHAR(160) NULL,
+  variety_name VARCHAR(160) NULL,
+  quantity INT NOT NULL DEFAULT 0,
+  location_name VARCHAR(160) NULL,
+  notes TEXT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (batch_id) REFERENCES seedling_batches(id) ON DELETE SET NULL,
+  FOREIGN KEY (issued_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_cert_number (certificate_number),
+  INDEX idx_cert_status (status)
 );

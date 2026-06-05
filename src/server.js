@@ -10,8 +10,13 @@ async function start() {
 
   initPool();
 
-  const server = app.listen(env.port, () => {
-    console.log(`Server ${env.port}-portda ishga tushdi`);
+  const host = process.env.HOST || "0.0.0.0";
+  const server = app.listen(env.port, host, () => {
+    console.log(`Server ${host}:${env.port} da ishga tushdi`);
+    if (host === "0.0.0.0") {
+      console.log(`WiFi orqali: http://<local_IP>:${env.port}`);
+      console.log(`QR skan test: http://<local_IP>:${env.port}/scan/BATCH-XXXX`);
+    }
   });
 
   const shutdown = async () => {
